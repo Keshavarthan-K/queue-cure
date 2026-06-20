@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Receptionist Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background-color: #f4f6f9; display: flex; gap: 20px; }
+        .panel { flex: 1; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        input[type="text"], button, select { width: 100%; padding: 12px; margin: 10px 0; border-radius: 4px; border: 1px solid #ccc; font-size: 16px; box-sizing: border-box;}
+        button { background-color: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; }
+        button:hover { background-color: #0056b3; }
+        .call-btn { background-color: #28a745; margin-top: 20px; font-size: 18px; padding: 15px;}
+        .call-btn:hover { background-color: #218838; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        .urgent-tag { background: #dc3545; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;}
+        
+        #qrDisplay { margin-top: 20px; text-align: center; display: none; background: #e9ecef; padding: 20px; border-radius: 8px; border: 2px dashed #adb5bd; }
+        #qrImage { width: 150px; height: 150px; margin: 10px 0; }
+        
+        .break-panel { background-color: #fff3cd; border: 1px solid #ffeeba; padding: 15px; border-radius: 8px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="panel">
+    <h2>Reception Desk</h2>
+    
+    <form id="patientForm">
+        <label>Patient Name:</label>
+        <input type="text" id="patientName" placeholder="Type name..." required autofocus>
+        
+        <label>Mobile Number (Optional):</label>
+        <input type="text" id="patientPhone" placeholder="Enter 10-digit number...">
+
+        <label>Triage Level:</label>
+        <select id="triageLevel">
+            <option value="false">🟢 Standard (Normal Queue)</option>
+            <option value="true">🔴 EMERGENCY (Jump to Front)</option>
+        </select>
+
+        <button type="submit">Add Patient & Generate Ticket</button>
+    </form>
+
+    <div id="qrDisplay">
+        <h3 style="margin: 0; color: #333;">Digital Token Generated</h3>
+        <p style="margin: 5px 0; color: #666; font-size: 14px;">Scan to view live status & download ticket</p>
+        <img id="qrImage" src="" alt="QR Code">
+        <h2 id="qrTokenText" style="margin: 0; color: #007bff;"></h2>
+    </div>
+
+    <div class="break-panel">
+        <h3 style="margin: 0 0 10px 0; color: #856404;">⏸️ Doctor Availability</h3>
+        <div id="pauseControls">
+            <select id="pauseDuration">
+                <option value="30">30 Minutes</option>
+                <option value="60">1 Hour</option>
+                <option value="120">2 Hours</option>
+                <option value="180">3 Hours</option>
+            </select>
+            <button id="pauseBtn" style="background-color: #ffc107; color: black;">Mark Doctor Unavailable</button>
+        </div>
+        <button id="resumeBtn" style="background-color: #28a745; display: none;">▶️ Doctor Returned (Resume Queue)</button>
+    </div>
+
+    <button class="call-btn" id="callNextBtn">📢 CALL NEXT PATIENT</button>
+</div>
+
+<div class="panel" style="overflow-y: auto; max-height: 80vh;">
+    <h2>Live Waiting List</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Token</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody id="queueList"></tbody>
+    </table>
+
+    <h2 style="margin-top: 30px; color: #dc3545;">Standby (Skipped)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Token</th>
+                <th>Name</th>
+                <th>Time Left</th> <th>Action</th>
+            </tr>
+        </thead>
+        <tbody id="standbyList"></tbody>
+    </table>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+    const socket = io();
+    let isQueuePaused = false; 
+    let localStandbyList = []; // Track skipped patients globally for the live timer
+
+    document.getElementById('patientForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const nameInput = document.getElementById('patientName');
+        const phoneInput = document.getElementById('patientPhone');
+        const triageInput = document.getElementById('triageLevel');
+        
+        fetch('/api/add-patient', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: nameInput.value, phone: phoneInput.value, isUrgent: triageInput.value === "true" })
+        })
+        .then(res => res.json())
+        .then(data => {
+            const now = new Date();
+            const dateString = now.toLocaleDateString();
+            const timeString = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+            const patientUrl = `http://${window.location.host}/patient.html?token=${data.tokenNumber}&name=${encodeURIComponent(nameInput.value)}&date=${encodeURIComponent(dateString)}&time=${encodeURIComponent(timeString)}`;
+            
+            document.getElementById('qrImage').src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(patientUrl)}`;
+            document.getElementById('qrTokenText').innerText = `Token #${data.tokenNumber}`;
+            document.getElementById('qrDisplay').style.display = 'block';
+
+            nameInput.value = ''; phoneInput.value = ''; triageInput.value = "false"; nameInput.focus();
+        });
+    });
+
+    document.getElementById('callNextBtn').addEventListener('click', () => {
+        if (isQueuePaused) {
+            alert("❌ DOCTOR UNAVAILABLE! \nYou cannot call the next patient until you click 'Doctor Returned (Resume Queue)'.");
+            return;
+        }
+        fetch('/api/call-next', { method: 'POST' });
+        document.getElementById('qrDisplay').style.display = 'none';
+    });
+
+    document.getElementById('pauseBtn').addEventListener('click', () => {
+        const mins = document.getElementById('pauseDuration').value;
+        fetch('/api/pause', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ minutes: parseInt(mins) })
+        });
+    });
+
+    document.getElementById('resumeBtn').addEventListener('click', () => {
+        fetch('/api/resume', { method: 'POST' });
+    });
+
+    function skipPatient(id) { fetch('/api/skip-patient', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patientId: id }) }); }
+    function requeuePatient(id) { fetch('/api/requeue-patient', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patientId: id }) }); }
+
+    // --- NEW: Live Ticking Countdown for Standby List ---
+    function renderStandbyList() {
+        const standbyBody = document.getElementById('standbyList');
+        standbyBody.innerHTML = '';
+        
+        localStandbyList.forEach(patient => {
+            let timeLeftText = "Deleting soon...";
+            
+            if (patient.skippedAt) {
+                // 15 minutes = 15 * 60 * 1000 milliseconds
+                const expireTime = new Date(patient.skippedAt).getTime() + (15 * 60 * 1000);
+                const msLeft = expireTime - Date.now();
+                
+                if (msLeft > 0) {
+                    const m = Math.floor(msLeft / 60000);
+                    const s = Math.floor((msLeft % 60000) / 1000);
+                    timeLeftText = `${m}m ${s}s`;
+                }
+            }
+
+            const row = document.createElement('tr');
+            row.style.backgroundColor = "#f8f9fa";
+            row.innerHTML = `
+                <td><strong>#${patient.tokenNumber}</strong></td>
+                <td>${patient.name}</td>
+                <td style="color: #dc3545; font-weight: bold;">${timeLeftText}</td>
+                <td><button onclick="requeuePatient('${patient._id}')" style="background: #17a2b8; color: white; padding: 5px; border: none; font-size: 12px; margin:0; cursor: pointer; border-radius: 4px;">Re-queue (+2 Penalty)</button></td>
+            `;
+            standbyBody.appendChild(row);
+        });
+    }
+
+    // Tick the standby timer down every 1 second
+    setInterval(() => {
+        if (localStandbyList.length > 0) {
+            renderStandbyList();
+        }
+    }, 1000);
+
+    socket.on('queue_updated', (data) => {
+        isQueuePaused = data.clinicState.isPaused;
+        if (isQueuePaused) {
+            document.getElementById('pauseControls').style.display = 'none';
+            document.getElementById('resumeBtn').style.display = 'block';
+            document.getElementById('callNextBtn').style.opacity = '0.5';
+        } else {
+            document.getElementById('pauseControls').style.display = 'block';
+            document.getElementById('resumeBtn').style.display = 'none';
+            document.getElementById('callNextBtn').style.opacity = '1';
+        }
+
+        const queueBody = document.getElementById('queueList');
+        queueBody.innerHTML = ''; 
+        data.waitingList.forEach(patient => {
+            const row = document.createElement('tr');
+            if(patient.isUrgent) row.style.backgroundColor = "#fff0f0";
+            
+            const actionButton = patient.isUrgent 
+                ? '<span style="color: red; font-size: 12px; font-weight:bold;">Cannot Skip</span>' 
+                : `<button onclick="skipPatient('${patient._id}')" style="background: #ffc107; color: black; padding: 5px; font-size: 12px; margin:0; cursor: pointer; border-radius: 4px;">Skip</button>`;
+
+            row.innerHTML = `<td><strong>#${patient.tokenNumber}</strong></td><td>${patient.name}</td><td>${patient.isUrgent ? '<span class="urgent-tag">Urgent</span>' : 'Waiting'}</td><td>${actionButton}</td>`;
+            queueBody.appendChild(row);
+        });
+
+        // Update local memory and immediately render the standby list
+        localStandbyList = data.standbyList;
+        renderStandbyList();
+    });
+</script>
+
+</body>
+</html>
