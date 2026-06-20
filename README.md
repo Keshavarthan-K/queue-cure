@@ -20,7 +20,7 @@ SyncQ is an event-driven, real-time queue management system designed for medical
 ## ⚙️ How to Run Locally
 
 1. Clone the repository:
-   git clone https://github.com/keshavarthank/queue-cure.git
+   git clone https://github.com/Keshavarthan-K/queue-cure.git
    cd YOUR-REPO-NAME
 
 2. Install dependencies:
